@@ -47,11 +47,11 @@ COLL_NS_MAP = {
 # map of legacy item types to fedora content models
 ITEM_TYPE_CM_MAP = {
     'image': 'islandora:sp_large_image_cmodel',
-    'text - cataloged': 'archiveorg:bookCModel',
-    'text - uncataloged': 'archiveorg:bookCModel',
+    'text - cataloged': 'islandora:bookCModel',
+    'text - uncataloged': 'islandora:bookCModel',
     'map': 'islandora:sp_large_image_cmodel',
-    'manuscript': 'archiveorg:bookCModel',
-    'page': 'archiveorg:pageCModel'
+    'manuscript': 'islandora:bookCModel',
+    'page': 'islandora:pageCModel'
 }
 
 
