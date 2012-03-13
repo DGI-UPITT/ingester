@@ -72,7 +72,8 @@ def get_collection_members(collection_id):
     return workflow.core.models.Item.objects.filter(primary_collection__c_id=collection_id)
 
 def handle_base_object(fedora_client, item, ns, cm):
-    """Create the base object record in Fedora, add common datastreams.
+    """
+    Create the base object record in Fedora, add common datastreams.
 
     @param item: The django item object from legacy workflow
     @param ns: The namespace to be used for the object's pid
@@ -130,7 +131,31 @@ def handle_derived_jp2(fedora_object, tiff):
     fedoraLib.update_datastream(fedora_object, u"JP2", jp2_file, label=os.path.basename(jp2_file), mimeType=u'image/jp2', controlGroup='M')
     os.remove(jp2_file) # finished with that
     return
-        
+
+def handle_derived_mix(fedora_object, tiff):
+    """
+    Extract MIX metadata from the input tiff file
+    """
+    basename = os.path.splitext(tiff.name)[0]
+    mix_file = os.path.join("/tmp", "%s.mix.xml" % baseName)
+    out_file = open(mix_file, "w")
+    #cmd= jhove -h xml $INFILE | xsltproc jhove2mix.xslt - > `basename ${$INFILE%.*}.mix`
+    jhoveCmd1 = ["/opt/jhove/jhove", "-h", "xml", tiff.name]
+    jhoveCmd2 = ["xsltproc", "data/jhove2mix.xslt", "-"] # complete cmd for xsltproc
+    #jhoveCmd2 = ["xalan", "-xsl", "data/jhove2mix.xslt"] # complete cmd for xalan
+    p1 = subprocess.Popen(jhoveCmd1, stdout=subprocess.PIPE)
+    p2 = subprocess.Popen(jhoveCmd2, stdin=p1.stdout, stdout=out_file)
+    r = p2.communicate()
+    if os.path.getsize(mix_file) == 0:
+        # failed for some reason
+        print("jhove conversion failed")
+    else:
+        fedoraLib.update_datastream(fedora_object, u"MIX", mix_file, label=os.path.basename(mix_file), mimeType=misc.getMimeType("xml"))
+    out_file.close()
+    """ end extract """
+    os.remove(mix_file) # finished with that
+    return
+
 def handle_image_object(fedora_object, item):
     print '%s - handle image object' % (item.do_id,)
     # tiff image file
