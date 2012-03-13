@@ -160,7 +160,8 @@ def handle_text_object(fedora_client, fedora_object, item):
         page_pid = '%s-%s' % (fedora_object.pid, page_basename)
         page_label = u'%s-%s' % (fedora_object.label, page_basename)
         extraNamespaces = { 'pageNS' : 'info:islandora/islandora-system:def/pageinfo#' }
-        extraRelationships = { fedora_relationships.rels_predicate('pageNS', 'isPageNumber') : str(int(page_basename)) }
+        extraRelationships = { fedora_relationships.rels_predicate('pageNS', 'isPageNumber') : str(int(page_basename)),
+                               fedora_relationships.rels_predicate('pageNS', 'isPageOf') : str(fedora_object.pid) }
         page_object = addObjectToFedora(fedora_client, page_label, page_pid, fedora_object.pid, page_cm, extraNamespaces=extraNamespaces, extraRelationships=extraRelationships)
         fedoraLib.update_datastream(page_object, 'TIFF', page.path, label=page.name, mimeType='image/tiff', controlGroup='M')
         handle_derived_jp2(page_object, page)
@@ -223,6 +224,3 @@ def ingest_item(item):
     else:
         pass
 
-    
-    
-    
