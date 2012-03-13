@@ -154,7 +154,7 @@ def handle_text_object(fedora_client, fedora_object, item):
     ocr_zip = zipfile.ZipFile(ocr_zipfile.path, 'r')
     # pages
     pages = workflow.core.models.Item_File.objects.filter(item=item, use='MASTER').order_by('name')
-    page_cm = 'archiveorg:pageCModel'
+    page_cm = 'islandora:pageCModel'
     for page in pages:
         page_basename = os.path.splitext(page.name)[0]
         page_pid = '%s-%s' % (fedora_object.pid, page_basename)
