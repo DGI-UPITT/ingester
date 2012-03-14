@@ -178,6 +178,10 @@ def handle_text_object(fedora_client, fedora_object, item):
     # ocr zip
     ocr_zipfile = workflow.core.models.Item_File.objects.get(item=item, use='OCR_ZIP')
     ocr_zip = zipfile.ZipFile(ocr_zipfile.path, 'r')
+    # master pdf and ocr
+    book_PDF_filename = os.path.join("/tmp", "%s.pdf" % item.name)
+    book_OCR_filename = os.path.join("/tmp", "%s-full.ocr" % item.name)
+    ocr_page_list = []
     # pages
     pages = workflow.core.models.Item_File.objects.filter(item=item, use='MASTER').order_by('name')
     page_cm = 'islandora:pageCModel'
@@ -186,6 +190,7 @@ def handle_text_object(fedora_client, fedora_object, item):
         page_pid = '%s-%s' % (fedora_object.pid, page_basename)
         page_label = u'%s-%s' % (fedora_object.label, page_basename)
         extraNamespaces = { 'pageNS' : 'info:islandora/islandora-system:def/pageinfo#' }
+        # should the page number be a counter here instead of int(page_basename)?
         extraRelationships = { fedora_relationships.rels_predicate('pageNS', 'isPageNumber') : str(int(page_basename)),
                                fedora_relationships.rels_predicate('pageNS', 'isPageOf') : str(fedora_object.pid) }
         page_object = addObjectToFedora(fedora_client, page_label, page_pid, fedora_object.pid, page_cm, extraNamespaces=extraNamespaces, extraRelationships=extraRelationships)
@@ -197,7 +202,19 @@ def handle_text_object(fedora_client, fedora_object, item):
             ocr_file = ocr_zip.extract(ocr_filename, '/tmp') 
             ocr_path = os.path.join('/tmp', ocr_filename) 
             fedoraLib.update_datastream(page_object, u'OCR', ocr_path, label=unicode(ocr_filename), mimeType=u'text/plain', controlGroup='M')
+            # add this page's ocr to the running total
+            f = open(os.path.join(config.tempDir, ocr_file),'r')
+            ocr_page_list.append(f.read())
+            f.close()
             os.remove(ocr_path)
+
+    ocr_book_data = ''.join(ocr_page_list)
+    f = open(full_OCR_filename, "r+")
+    f.write(ocr_book_data)
+    f.close()
+    fedoraLib.update_datastream(fedora_object, u"BOOKOCR", full_OCR_filename, label=unicode(os.path.basename(full_OCR_filename)), mimeType="text/plain")
+    os.remove(full_OCR_filename)
+
     return
 
 def handle_map_object(fedora_object, item):
