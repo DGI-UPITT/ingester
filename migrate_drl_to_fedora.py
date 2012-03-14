@@ -132,6 +132,9 @@ def handle_derived_jp2(fedora_object, tiff):
     os.remove(jp2_file) # finished with that
     return
 
+"""
+Note: this converter is not finished yet
+"""
 def handle_derived_pdf(fedora_object, tiff):
     """
     Create pdf derivative from tiff, not sure if the pyutils converter is the way to go
