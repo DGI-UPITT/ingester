@@ -132,6 +132,18 @@ def handle_derived_jp2(fedora_object, tiff):
     os.remove(jp2_file) # finished with that
     return
 
+def handle_derived_pdf(fedora_object, tiff):
+    """
+    Create pdf derivative from tiff, not sure if the pyutils converter is the way to go
+    or if /usr/local/dlxs contains an encoder for this
+    """
+    baseName = os.path.splitext(tiff.name)[0]
+    pdf_file = os.path.join("/tmp", "%s.pdf" % baseName)
+    #converter.tif_to_pdf(tiff, pdf_file, 'default')
+    #fedoraLib.update_datastream(fedora_object, u"PDF", pdf_file, lavel=os.path.basename(pdf_file), mimetype=u'application/pdf', controlGroup='M')
+    #os.remove(pdf_file)
+    return
+
 def handle_derived_mix(fedora_object, tiff):
     """
     Extract MIX metadata from the input tiff file
