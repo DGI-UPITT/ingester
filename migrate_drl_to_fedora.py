@@ -162,6 +162,7 @@ def handle_image_object(fedora_object, item):
     tiff = workflow.core.models.Item_File.objects.get(item=item, use='MASTER')
     fedoraLib.update_datastream(fedora_object, 'TIFF', tiff.path, label=tiff.name, mimeType='image/tiff', controlGroup='M')
     handle_derived_jp2(fedora_object, tiff)
+    handle_derived_mix(fedora_object, tiff)
     return 
 
 def handle_text_object(fedora_client, fedora_object, item):
@@ -190,6 +191,7 @@ def handle_text_object(fedora_client, fedora_object, item):
         page_object = addObjectToFedora(fedora_client, page_label, page_pid, fedora_object.pid, page_cm, extraNamespaces=extraNamespaces, extraRelationships=extraRelationships)
         fedoraLib.update_datastream(page_object, 'TIFF', page.path, label=page.name, mimeType='image/tiff', controlGroup='M')
         handle_derived_jp2(page_object, page)
+        handle_derived_mix(page_object, page)
         ocr_filename = '%s.txt' % (page_basename,)
         if ocr_filename in ocr_zip.namelist():
             ocr_file = ocr_zip.extract(ocr_filename, '/tmp') 
