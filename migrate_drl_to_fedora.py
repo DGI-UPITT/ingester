@@ -47,11 +47,11 @@ COLL_NS_MAP = {
 # map of legacy item types to fedora content models
 ITEM_TYPE_CM_MAP = {
     'image': 'islandora:sp_large_image_cmodel',
-    'text - cataloged': 'archiveorg:bookCModel',
-    'text - uncataloged': 'archiveorg:bookCModel',
+    'text - cataloged': 'islandora:bookCModel',
+    'text - uncataloged': 'islandora:bookCModel',
     'map': 'islandora:sp_large_image_cmodel',
-    'manuscript': 'archiveorg:bookCModel',
-    'page': 'archiveorg:pageCModel'
+    'manuscript': 'islandora:bookCModel',
+    'page': 'islandora:pageCModel'
 }
 
 
@@ -72,7 +72,8 @@ def get_collection_members(collection_id):
     return workflow.core.models.Item.objects.filter(primary_collection__c_id=collection_id)
 
 def handle_base_object(fedora_client, item, ns, cm):
-    """Create the base object record in Fedora, add common datastreams.
+    """
+    Create the base object record in Fedora, add common datastreams.
 
     @param item: The django item object from legacy workflow
     @param ns: The namespace to be used for the object's pid
@@ -130,13 +131,53 @@ def handle_derived_jp2(fedora_object, tiff):
     fedoraLib.update_datastream(fedora_object, u"JP2", jp2_file, label=os.path.basename(jp2_file), mimeType=u'image/jp2', controlGroup='M')
     os.remove(jp2_file) # finished with that
     return
-        
+
+"""
+Note: this converter is not finished yet
+"""
+def handle_derived_pdf(fedora_object, tiff):
+    """
+    Create pdf derivative from tiff, not sure if the pyutils converter is the way to go
+    or if /usr/local/dlxs contains an encoder for this
+    """
+    baseName = os.path.splitext(tiff.name)[0]
+    pdf_file = os.path.join("/tmp", "%s.pdf" % baseName)
+    #converter.tif_to_pdf(tiff, pdf_file, 'default')
+    #fedoraLib.update_datastream(fedora_object, u"PDF", pdf_file, lavel=os.path.basename(pdf_file), mimetype=u'application/pdf', controlGroup='M')
+    #os.remove(pdf_file)
+    return
+
+def handle_derived_mix(fedora_object, tiff):
+    """
+    Extract MIX metadata from the input tiff file
+    """
+    basename = os.path.splitext(tiff.name)[0]
+    mix_file = os.path.join("/tmp", "%s.mix.xml" % baseName)
+    out_file = open(mix_file, "w")
+    #cmd= jhove -h xml $INFILE | xsltproc jhove2mix.xslt - > `basename ${$INFILE%.*}.mix`
+    jhoveCmd1 = ["/opt/jhove/jhove", "-h", "xml", tiff.name]
+    jhoveCmd2 = ["xsltproc", "data/jhove2mix.xslt", "-"] # complete cmd for xsltproc
+    #jhoveCmd2 = ["xalan", "-xsl", "data/jhove2mix.xslt"] # complete cmd for xalan
+    p1 = subprocess.Popen(jhoveCmd1, stdout=subprocess.PIPE)
+    p2 = subprocess.Popen(jhoveCmd2, stdin=p1.stdout, stdout=out_file)
+    r = p2.communicate()
+    if os.path.getsize(mix_file) == 0:
+        # failed for some reason
+        print("jhove conversion failed")
+    else:
+        fedoraLib.update_datastream(fedora_object, u"MIX", mix_file, label=os.path.basename(mix_file), mimeType=misc.getMimeType("xml"))
+    out_file.close()
+    """ end extract """
+    os.remove(mix_file) # finished with that
+    return
+
 def handle_image_object(fedora_object, item):
     print '%s - handle image object' % (item.do_id,)
     # tiff image file
     tiff = workflow.core.models.Item_File.objects.get(item=item, use='MASTER')
     fedoraLib.update_datastream(fedora_object, 'TIFF', tiff.path, label=tiff.name, mimeType='image/tiff', controlGroup='M')
     handle_derived_jp2(fedora_object, tiff)
+    handle_derived_mix(fedora_object, tiff)
     return 
 
 def handle_text_object(fedora_client, fedora_object, item):
@@ -152,24 +193,43 @@ def handle_text_object(fedora_client, fedora_object, item):
     # ocr zip
     ocr_zipfile = workflow.core.models.Item_File.objects.get(item=item, use='OCR_ZIP')
     ocr_zip = zipfile.ZipFile(ocr_zipfile.path, 'r')
+    # master pdf and ocr
+    book_PDF_filename = os.path.join("/tmp", "%s.pdf" % item.name)
+    book_OCR_filename = os.path.join("/tmp", "%s-full.ocr" % item.name)
+    ocr_page_list = []
     # pages
     pages = workflow.core.models.Item_File.objects.filter(item=item, use='MASTER').order_by('name')
-    page_cm = 'archiveorg:pageCModel'
+    page_cm = 'islandora:pageCModel'
     for page in pages:
         page_basename = os.path.splitext(page.name)[0]
         page_pid = '%s-%s' % (fedora_object.pid, page_basename)
         page_label = u'%s-%s' % (fedora_object.label, page_basename)
         extraNamespaces = { 'pageNS' : 'info:islandora/islandora-system:def/pageinfo#' }
-        extraRelationships = { fedora_relationships.rels_predicate('pageNS', 'isPageNumber') : str(int(page_basename)) }
+        # should the page number be a counter here instead of int(page_basename)?
+        extraRelationships = { fedora_relationships.rels_predicate('pageNS', 'isPageNumber') : str(int(page_basename)),
+                               fedora_relationships.rels_predicate('pageNS', 'isPageOf') : str(fedora_object.pid) }
         page_object = addObjectToFedora(fedora_client, page_label, page_pid, fedora_object.pid, page_cm, extraNamespaces=extraNamespaces, extraRelationships=extraRelationships)
         fedoraLib.update_datastream(page_object, 'TIFF', page.path, label=page.name, mimeType='image/tiff', controlGroup='M')
         handle_derived_jp2(page_object, page)
+        handle_derived_mix(page_object, page)
         ocr_filename = '%s.txt' % (page_basename,)
         if ocr_filename in ocr_zip.namelist():
             ocr_file = ocr_zip.extract(ocr_filename, '/tmp') 
             ocr_path = os.path.join('/tmp', ocr_filename) 
             fedoraLib.update_datastream(page_object, u'OCR', ocr_path, label=unicode(ocr_filename), mimeType=u'text/plain', controlGroup='M')
+            # add this page's ocr to the running total
+            f = open(os.path.join(config.tempDir, ocr_file),'r')
+            ocr_page_list.append(f.read())
+            f.close()
             os.remove(ocr_path)
+
+    ocr_book_data = ''.join(ocr_page_list)
+    f = open(full_OCR_filename, "r+")
+    f.write(ocr_book_data)
+    f.close()
+    fedoraLib.update_datastream(fedora_object, u"BOOKOCR", full_OCR_filename, label=unicode(os.path.basename(full_OCR_filename)), mimeType="text/plain")
+    os.remove(full_OCR_filename)
+
     return
 
 def handle_map_object(fedora_object, item):
@@ -223,6 +283,3 @@ def ingest_item(item):
     else:
         pass
 
-    
-    
-    
