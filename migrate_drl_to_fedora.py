@@ -1,10 +1,10 @@
 #!/usr/local/bin/python
 import sys
 import os
-import logging
 import zipfile
 import subprocess
 import shutil
+from lxml import etree 
 sys.path.append('/usr/local/dlxs/prep/w/workflow/lib')
 sys.path.append('/usr/local/dlxs/prep/w/workflow/django')
 os.environ["DJANGO_SETTINGS_MODULE"] = 'workflow.settings'
@@ -26,7 +26,6 @@ type and route to a handler function that will create the object in
 Fedora and upload all relevant datastreams.
 """
 
-logging.basicConfig(level=logging.DEBUG)
 
 # map of legacy collection ids to fedora namespace
 COLL_NS_MAP = {
@@ -54,6 +53,25 @@ ITEM_TYPE_CM_MAP = {
     'page': 'islandora:pageCModel'
 }
 
+def clean_page_labels(dict):
+    cleaned_dict = {}
+    for file in dict.keys():
+        label = dict[file]
+        if label == 'unum':
+            seq = os.path.splitext(file)[0]
+            cleaned_dict[file] = '[unnumbered page (%s)]' % (seq,)
+        elif label.startswith('r0'):
+            digit = int(label[1:4])
+            roman = drl.utils.get_roman_numeral(digit)
+            cleaned_dict[file] = 'Page %s' % (roman,)
+        else:
+            try:
+                i = int(label)
+                cleaned_dict[file] = 'Page %s' % (i,)
+            except:
+                cleaned_dict[file] = '[page %s]' % (label,)
+    return cleaned_dict 
+            
 
 def connect_to_fedora():
     try:
@@ -70,6 +88,28 @@ def connect_to_fedora():
 
 def get_collection_members(collection_id):
     return workflow.core.models.Item.objects.filter(primary_collection__c_id=collection_id)
+
+def get_collection_namespace(item):
+    return COLL_NS_MAP[item.primary_collection.c_id] 
+
+def get_item_content_model(item):
+    return ITEM_TYPE_CM_MAP[item.type.name]
+
+def get_page_label_dict_from_mets(mets_path):
+    """
+    Parse the METS structMap to get proper page label
+    """
+    METS_NS_MAP = {'mets': 'http://www.loc.gov/METS/'} 
+    mets = etree.parse(open(mets_path, 'r'))
+    labels = {}
+    for file in mets.iter('{http://www.loc.gov/METS/}file'):
+        file_id = file.get('ID')
+        file_name = file[0].get('{http://www.w3.org/1999/xlink}href')
+        xpath_string = '//mets:div[@TYPE="page"]/mets:fptr[@FILEID="%s"]' % (file_id,)
+        fptr = mets.xpath(xpath_string, namespaces=METS_NS_MAP)[0]
+        label = fptr.getparent().get('LABEL')
+        labels[file_name] = label
+    return labels
 
 def handle_base_object(fedora_client, item, ns, cm):
     """
@@ -89,7 +129,7 @@ def handle_base_object(fedora_client, item, ns, cm):
     # if this object already exists, return (for now)
     try:
         obj = fedora_client.getObject(pid)
-        return None
+        return obj 
     except:
         pass
     # validate required objects, (for now) skip if not found
@@ -101,21 +141,17 @@ def handle_base_object(fedora_client, item, ns, cm):
         return
     try:
         obj = addObjectToFedora(fedora_client, label, pid, parent_pid, cm)
-        logging.info('added object to fedora OK')
     except Exception, ex:
         print 'connection error while trying to add fedora object %s: %s' % (pid, ex.message)
         return False
     # mods
     mods = workflow.core.models.Item_File.objects.get(item=item, use='MODS')
-    logging.info('adding MODS datastream')
     fedoraLib.update_datastream(obj, u'MODS', mods.path, label=mods.name, mimeType=u'text/xml', controlGroup='X')
     # dc
     dc = workflow.core.models.Item_File.objects.get(item=item, use='DC')
-    logging.info('adding DC datastream')
     fedoraLib.update_datastream(obj, u'DC', dc.path, label=dc.name, mimeType=u'text/xml', controlGroup='M')
     # thumb
     thumb = workflow.core.models.Item_File.objects.get(item=item, use='THUMB')
-    logging.info('adding thumbnail datastream')
     fedoraLib.update_datastream(obj, u'TN', thumb.path, label=thumb.name, mimeType=u'image/jpeg', controlGroup='M')
     return obj
 
@@ -177,58 +213,55 @@ def handle_image_object(fedora_object, item):
     tiff = workflow.core.models.Item_File.objects.get(item=item, use='MASTER')
     fedoraLib.update_datastream(fedora_object, 'TIFF', tiff.path, label=tiff.name, mimeType='image/tiff', controlGroup='M')
     handle_derived_jp2(fedora_object, tiff)
-    handle_derived_mix(fedora_object, tiff)
+    #handle_derived_mix(fedora_object, tiff)
+    try:
+        kml = workflow.core.models.Item_File.objects.get(item=item, use='KML')
+        # activate this when ready
+        # fedoraLib.update_datastream(fedora_object, 'KML', kml.path, label=kml.name, mimeType='text/xml', controlGroup='M')
+    except:
+        return 
     return 
 
 def handle_text_object(fedora_client, fedora_object, item):
     print '%s - handle text object' % (item.do_id,)
     # marcxml
     marcxml = workflow.core.models.Item_File.objects.get(item=item, use='MARCXML')
-    logging.info('adding MARCXML datastream')
     fedoraLib.update_datastream(fedora_object, u'MARCXML', marcxml.path, label=marcxml.name, mimeType=u'text/xml', controlGroup='M')
     # mets 
     mets = workflow.core.models.Item_File.objects.get(item=item, use='METS')
-    logging.info('adding METS datastream')
     fedoraLib.update_datastream(fedora_object, u'METS', mets.path, label=mets.name, mimeType=u'text/xml', controlGroup='M')
     # ocr zip
     ocr_zipfile = workflow.core.models.Item_File.objects.get(item=item, use='OCR_ZIP')
     ocr_zip = zipfile.ZipFile(ocr_zipfile.path, 'r')
     # master pdf and ocr
-    book_PDF_filename = os.path.join("/tmp", "%s.pdf" % item.name)
-    book_OCR_filename = os.path.join("/tmp", "%s-full.ocr" % item.name)
+    book_PDF_filename = os.path.join("/tmp", "%s.pdf" % item.do_id) 
+    book_OCR_filename = os.path.join("/tmp", "%s-full.ocr" % item.do_id)
     ocr_page_list = []
     # pages
+    page_label_dict = get_page_label_dict_from_mets(mets.path)
+    cleaned_page_labels = clean_page_labels(page_label_dict)
     pages = workflow.core.models.Item_File.objects.filter(item=item, use='MASTER').order_by('name')
-    page_cm = 'islandora:pageCModel'
     for page in pages:
-        page_basename = os.path.splitext(page.name)[0]
-        page_pid = '%s-%s' % (fedora_object.pid, page_basename)
-        page_label = u'%s-%s' % (fedora_object.label, page_basename)
-        extraNamespaces = { 'pageNS' : 'info:islandora/islandora-system:def/pageinfo#' }
-        # should the page number be a counter here instead of int(page_basename)?
-        extraRelationships = { fedora_relationships.rels_predicate('pageNS', 'isPageNumber') : str(int(page_basename)),
-                               fedora_relationships.rels_predicate('pageNS', 'isPageOf') : str(fedora_object.pid) }
-        page_object = addObjectToFedora(fedora_client, page_label, page_pid, fedora_object.pid, page_cm, extraNamespaces=extraNamespaces, extraRelationships=extraRelationships)
-        fedoraLib.update_datastream(page_object, 'TIFF', page.path, label=page.name, mimeType='image/tiff', controlGroup='M')
-        handle_derived_jp2(page_object, page)
-        handle_derived_mix(page_object, page)
-        ocr_filename = '%s.txt' % (page_basename,)
+        ocr_filename = '%s.txt' % (os.path.splitext(page.name)[0],)
+        ocr_path = None # initalize
         if ocr_filename in ocr_zip.namelist():
             ocr_file = ocr_zip.extract(ocr_filename, '/tmp') 
             ocr_path = os.path.join('/tmp', ocr_filename) 
-            fedoraLib.update_datastream(page_object, u'OCR', ocr_path, label=unicode(ocr_filename), mimeType=u'text/plain', controlGroup='M')
             # add this page's ocr to the running total
-            f = open(os.path.join(config.tempDir, ocr_file),'r')
+            f = open(ocr_path, 'r')
             ocr_page_list.append(f.read())
             f.close()
+        page_label = cleaned_page_labels[page.name]
+        handle_page_object(fedora_client, fedora_object, page, ocr_path, page_label)
+        if ocr_path:
             os.remove(ocr_path)
 
     ocr_book_data = ''.join(ocr_page_list)
-    f = open(full_OCR_filename, "r+")
+    f = open(book_OCR_filename, "w")
     f.write(ocr_book_data)
     f.close()
-    fedoraLib.update_datastream(fedora_object, u"BOOKOCR", full_OCR_filename, label=unicode(os.path.basename(full_OCR_filename)), mimeType="text/plain")
-    os.remove(full_OCR_filename)
+    fedoraLib.update_datastream(fedora_object, u"BOOKOCR", book_OCR_filename, label=unicode(os.path.basename(book_OCR_filename)), mimeType="text/plain")
+    os.remove(book_OCR_filename)
 
     return
 
@@ -247,28 +280,45 @@ def handle_manuscript_object(fedora_object, item):
         # tiff page image file
         # dc
 
-def get_collection_namespace(item):
-    return COLL_NS_MAP[item.primary_collection.c_id] 
+def handle_page_object(fedora_client, fedora_object, page, ocr_path, label):
+    """
+    The page object gets some extra relationships as a member of a book object.
+    It should also get:
+        - MODS (this should be based on parent book mods, but with page label from METS structmap)
+        - JP2 (derived from TIFF)
+        - MIX
+        - OCR, if available
+    """
+    page_cm = ITEM_TYPE_CM_MAP['page']
+    page_basename = os.path.splitext(page.name)[0]
+    page_pid = '%s-%s' % (fedora_object.pid, page_basename)
+    page_label = u'%s, %s' % (label, drl.utils.shorten_string(fedora_object.label, 205))
+    extraNamespaces = { 'pageNS' : 'info:islandora/islandora-system:def/pageinfo#' }
+    # should the page number be a counter here instead of int(page_basename)?
+    extraRelationships = { fedora_relationships.rels_predicate('pageNS', 'isPageNumber') : str(int(page_basename)),
+                           fedora_relationships.rels_predicate('pageNS', 'isPageOf') : str(fedora_object.pid) }
+    page_object = addObjectToFedora(fedora_client, page_label, page_pid, fedora_object.pid, page_cm, extraNamespaces=extraNamespaces, extraRelationships=extraRelationships)
+    fedoraLib.update_datastream(page_object, 'TIFF', page.path, label=page.name, mimeType='image/tiff', controlGroup='M')
+    handle_derived_jp2(page_object, page)
+    #handle_derived_mix(page_object, page)
+    if ocr_path:
+        ocr_filename = os.path.basename(ocr_path) 
+        fedoraLib.update_datastream(page_object, u'OCR', ocr_path, label=unicode(ocr_filename), mimeType=u'text/plain', controlGroup='M')
 
-def get_item_content_model(item):
-    return ITEM_TYPE_CM_MAP[item.type.name]
 
 def ingest_collection(collection_id):
     for item in get_collection_members(collection_id):
         ingest_item(item)
 
 def ingest_item(item):
-    logging.info('connecting to fedora')
     fedora_client = connect_to_fedora()
     if not fedora_client:
         sys.exit(0)        
-    logging.info('connected to fedora')
     ns = get_collection_namespace(item)
     print '%s - coll namespace: %s' % (item.do_id, ns)
     cm = get_item_content_model(item)
     print '%s - content model: %s' % (item.do_id, cm)
     type = item.type.name
-    logging.info('handling basic object setup')
     fedora_object = handle_base_object(fedora_client, item, ns, cm)
     if not fedora_object:
         return
